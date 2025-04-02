@@ -1,0 +1,138 @@
+/// @file
+/// @brief To reproduce a bug about connection lost
+/// @copyright
+///   2025 Mitsutoshi Nakano
+///   SPDX-License-Identifier: AGPL-3.0
+/// @author Mitsutoshi Nakano <ItSANgo@gmail.com>
+/// @version 0.1.0
+/// @date 2025-04-02
+
+#include <err.h>
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/types.h>
+#include <sysexits.h>
+
+#include "ini.h"
+#include "list.h"
+
+#if __has_c_attribute(noreturn)
+#define NORETURN [[noreturn]]
+#else
+#define NORETURN
+#endif // __has_c_attribute(noreturn)
+
+#define MSG_SIZE 1024
+
+NORETURN static void
+dump_sqlca(int status)
+{
+    errx(
+        status,
+        "sqlcode: %ld sqlstate: %5s, sqlerrml: %d\n"
+        "sqlerrd: %ld %ld %ld %ld %ld %ld, sqlwarn: %d %d %d %d %d %d %d %d\n"
+        "errm: %s\n",
+        sqlca.sqlcode, sqlca.sqlstate, sqlca.sqlerrm.sqlerrml, sqlca.sqlerrd[0],
+        sqlca.sqlerrd[1], sqlca.sqlerrd[2], sqlca.sqlerrd[3], sqlca.sqlerrd[4],
+        sqlca.sqlerrd[5], sqlca.sqlwarn[0], sqlca.sqlwarn[1], sqlca.sqlwarn[2],
+        sqlca.sqlwarn[3], sqlca.sqlwarn[4], sqlca.sqlwarn[5], sqlca.sqlwarn[6],
+        sqlca.sqlwarn[7], sqlca.sqlerrm.sqlerrmc
+    );
+}
+
+NORETURN static void
+usage(int status, const char *progname)
+{
+    fprintf(
+        status ? stderr : stdout,
+        "Usage: %s [options]\n"
+        "Options:\n"
+        "  -i, --ini <file>   Specify INI file\n"
+        "  -h, --help        Show this help message\n"
+        "  -V, --version     Show version information\n",
+        progname
+    );
+    exit(status);
+}
+
+int
+main(int argc, char *argv[])
+{
+    static struct option long_options[] = {
+        {"ini", required_argument, NULL, 'i'},
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'V'},
+        {NULL, 0, NULL, 0}
+    };
+    const char *ini_file = "wait_msg.ini";
+    for (int c;
+         (c = getopt_long(argc, argv, "i:hV", long_options, NULL)) != -1;) {
+        switch (c) {
+        case 'i':
+            ini_file = optarg;
+            break;
+        case 'h':
+            usage(EX_OK, argv[0]);
+        case 'V':
+            printf("Version: 0.1.0-SNAPSHOT\n");
+            exit(0);
+        default:
+            fprintf(stderr, "Unknown option: %c\n", c);
+            usage(EX_USAGE, argv[0]);
+        }
+    }
+
+    FILE *fp = fopen(ini_file, "r");
+    if (fp == NULL) {
+        err(EX_NOINPUT, "%s:", ini_file);
+    }
+    struct list *ini_list = load_ini(fp);
+    if (ini_list == NULL) {
+        err(EX_DATAERR, "Failed to load INI file");
+    }
+    fclose(fp);
+
+    EXEC SQL WHENEVER SQLERROR GOTO sql_error;
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    const char *connection;
+    const char *user;
+    const char *password;
+    EXEC SQL END DECLARE SECTION;
+
+    connection = get_value(ini_list, "connection");
+    user = get_value(ini_list, "user");
+    password = get_value(ini_list, "password");
+
+    // clang-format off
+    EXEC SQL CONNECT TO :connection USER :user USING :password;
+    // clang-format on
+
+    int msgid = msgget(0, IPC_CREAT | 0600);
+    if (msgid < 0) {
+        err(EX_OSERR, "msgget");
+    }
+    struct msgbuf {
+        long mtype;
+        char mtext[MSG_SIZE];
+    } msg;
+    while (msgrcv(msgid, &msg, MSG_SIZE, 0, 0) >= 0) {
+        EXEC SQL BEGIN DECLARE SECTION;
+        int i;
+        EXEC SQL END DECLARE SECTION;
+
+        // clang-format off
+        EXEC SQL SELECT 1 INTO :i;
+        // clang-format on
+
+        printf("%d\n", i);
+    }
+    err(EX_UNAVAILABLE, "msgrcv");
+
+sql_error:
+    dump_sqlca(EX_UNAVAILABLE);
+}
