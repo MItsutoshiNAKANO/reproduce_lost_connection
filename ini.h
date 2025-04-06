@@ -10,6 +10,11 @@
 
 #define INI_LINE_MAX 1024
 
+#define CONNECTION "connection"
+#define USER "user"
+#define PASSWORD "password"
+#define KEY "key"
+
 struct key_value {
     char *key;
     char *value;
