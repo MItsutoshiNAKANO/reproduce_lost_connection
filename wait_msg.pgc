@@ -48,7 +48,7 @@ usage(int status, const char *progname)
 {
     fprintf(
         status ? stderr : stdout,
-        "Usage: %s [options]\n"
+        "Usage: %s [OPTIONS]\n"
         "Options:\n"
         "  -c, --conf FILE  Specify the configuration file\n"
         "  -h, --help       Show this help message\n"
@@ -114,22 +114,22 @@ main(int argc, char *argv[])
         }
     }
 
-    int msg_key = strtoull(values[E_KEY], NULL, 16);
+    key_t msg_key = strtoll(values[E_KEY], NULL, 16);
 
     // clang-format off
     EXEC SQL CONNECT TO :values[E_CONNECTION]
     USER :values[E_USER] USING :values[E_PASSWORD];
     // clang-format on
 
-    int msgid = msgget(msg_key, IPC_CREAT | 0600);
-    if (msgid < 0) {
+    int msgqid = msgget(msg_key, IPC_CREAT | 0600);
+    if (msgqid < 0) {
         err(EX_OSERR, "msgget");
     }
     struct msgbuf {
         long mtype;
         char mtext[MSG_SIZE];
     } msg;
-    while (msgrcv(msgid, &msg, MSG_SIZE, 0, 0) >= 0) {
+    while (msgrcv(msgqid, &msg, MSG_SIZE, 0, 0) >= 0) {
         EXEC SQL BEGIN DECLARE SECTION;
         int i;
         EXEC SQL END DECLARE SECTION;
@@ -138,7 +138,7 @@ main(int argc, char *argv[])
         EXEC SQL SELECT 1 INTO :i;
         // clang-format on
 
-        printf("%d\n", i);
+        printf("%d: %s\n", i, msg.mtext);
     }
     err(EX_OSERR, "msgrcv");
 
