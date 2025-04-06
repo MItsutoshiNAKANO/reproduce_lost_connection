@@ -5,7 +5,6 @@
 ///   SPDX-License-Identifier: AGPL-3.0
 /// @author Mitsutoshi Nakano <ItSANgo@gmail.com>
 /// @version 0.1.0
-/// @date 2025-04-02
 
 #include <err.h>
 #include <getopt.h>
@@ -51,29 +50,29 @@ usage(int status, const char *progname)
         status ? stderr : stdout,
         "Usage: %s [options]\n"
         "Options:\n"
-        "  -i, --ini <file>   Specify INI file\n"
-        "  -h, --help        Show this help message\n"
-        "  -V, --version     Show version information\n",
+        "  -c, --conf FILE  Specify the configuration file\n"
+        "  -h, --help       Show this help message\n"
+        "  -V, --version    Show version information\n",
         progname
     );
     exit(status);
 }
 
-int
+NORETURN int
 main(int argc, char *argv[])
 {
     static struct option long_options[] = {
-        {"ini", required_argument, NULL, 'i'},
+        {"conf", required_argument, NULL, 'c'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0}
     };
-    const char *ini_file = "wait_msg.ini";
+    const char *conf_file = "wait_msg.ini";
     for (int c;
-         (c = getopt_long(argc, argv, "i:hV", long_options, NULL)) != -1;) {
+         (c = getopt_long(argc, argv, "c:hV", long_options, NULL)) != -1;) {
         switch (c) {
-        case 'i':
-            ini_file = optarg;
+        case 'c':
+            conf_file = optarg;
             break;
         case 'h':
             usage(EX_OK, argv[0]);
@@ -86,33 +85,43 @@ main(int argc, char *argv[])
         }
     }
 
-    FILE *fp = fopen(ini_file, "r");
+    FILE *fp = fopen(conf_file, "r");
     if (fp == NULL) {
-        err(EX_NOINPUT, "%s:", ini_file);
+        err(EX_CONFIG, "the configuration file %s:", conf_file);
     }
     struct list *ini_list = load_ini(fp);
     if (ini_list == NULL) {
-        err(EX_DATAERR, "Failed to load INI file");
+        err(EX_IOERR, "failed to load the configuration file");
     }
-    fclose(fp);
+    if (fclose(fp)) {
+        warn("failed to fclose the configuration file");
+    }
 
     EXEC SQL WHENEVER SQLERROR GOTO sql_error;
 
+    const char *keys[] = {CONNECTION, USER, PASSWORD, KEY, NULL};
+    enum { E_CONNECTION, E_USER, E_PASSWORD, E_KEY, E_SIZE };
     EXEC SQL BEGIN DECLARE SECTION;
-    const char *connection;
-    const char *user;
-    const char *password;
+    const char *values[E_SIZE];
     EXEC SQL END DECLARE SECTION;
 
-    connection = get_value(ini_list, "connection");
-    user = get_value(ini_list, "user");
-    password = get_value(ini_list, "password");
+    for (int i = 0; keys[i] != NULL; i++) {
+        if ((values[i] = get_value(ini_list, keys[i])) == NULL) {
+            errx(
+                EX_CONFIG, "%s was not found in the configuration file %s",
+                keys[i], conf_file
+            );
+        }
+    }
+
+    int msg_key = strtoull(values[E_KEY], NULL, 16);
 
     // clang-format off
-    EXEC SQL CONNECT TO :connection USER :user USING :password;
+    EXEC SQL CONNECT TO :values[E_CONNECTION]
+    USER :values[E_USER] USING :values[E_PASSWORD];
     // clang-format on
 
-    int msgid = msgget(0, IPC_CREAT | 0600);
+    int msgid = msgget(msg_key, IPC_CREAT | 0600);
     if (msgid < 0) {
         err(EX_OSERR, "msgget");
     }
@@ -131,7 +140,7 @@ main(int argc, char *argv[])
 
         printf("%d\n", i);
     }
-    err(EX_UNAVAILABLE, "msgrcv");
+    err(EX_OSERR, "msgrcv");
 
 sql_error:
     dump_sqlca(EX_UNAVAILABLE);
