@@ -80,7 +80,7 @@ main(int argc, char *argv[])
     }
     const char *key_str = get_value(ini_list, KEY);
     if (key_str == NULL) {
-        err(EX_CONFIG,
+        errx(EX_CONFIG,
             KEY " was not found in the configuration file %s:", conf_file);
     }
 
